@@ -5,7 +5,6 @@ import tarfile
 import rarfile
 from tqdm import tqdm
 from urllib.parse import urlparse
-import re
 
 
 def download_file(url, folder, filename=None):
