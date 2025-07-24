@@ -1,7 +1,11 @@
 import os
 import requests
+import zipfile
+import tarfile
+import rarfile
 from tqdm import tqdm
 from urllib.parse import urlparse
+import re
 
 
 def download_file(url, folder, filename=None):
@@ -42,6 +46,7 @@ def download_file(url, folder, filename=None):
                     progress.update(len(chunk))
 
         print(f"File successfully downloaded to: {file_path}")
+        return file_path
 
     except requests.exceptions.HTTPError as http_err:
         print(f"HTTP error occurred: {http_err}")
@@ -54,3 +59,29 @@ def download_file(url, folder, filename=None):
 
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
+
+def extract_archive(arch_path, extract_to=None):
+    """
+    Extracts various archive formats (.zip, .tar.gz, .tar, .rar) to a target folder.
+    """
+    if extract_to is None:
+        extract_to = os.path.splitext(arch_path)[0]  # the base path without the extension
+    os.makedirs(extract_to, exist_ok=True)
+
+    if zipfile.is_zipfile(arch_path):
+        with zipfile.ZipFile(arch_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+        print(f"ZIP file extracted to: {extract_to}")
+
+    elif tarfile.is_tarfile(arch_path):
+        with tarfile.open(arch_path, 'r:*') as tar_ref:  # try all known supported compressions
+            tar_ref.extractall(extract_to)
+        print(f"TAR file extracted to: {extract_to}")
+    
+    elif arch_path.endswith('.rar'):
+        with rarfile.RarFile(arch_path) as rar_ref:
+            rar_ref.extractall(extract_to)
+        print(f"RAR file extracted to: {extract_to}")
+    
+    else:
+        raise ValueError(f"Unsupported archive format for file: {arch_path}")
