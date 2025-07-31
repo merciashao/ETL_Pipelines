@@ -4,31 +4,39 @@ import chardet
 import os
 from pathlib import Path
 import chardet
+from typing import Union, Optional
 
 
 # Identify and fix ecoding issues
-def check_encoding(src_file):
+def check_encoding(src_file: Union[str, Path]) -> Optional[dict]:
+    """
+    Detect the encoding of .dbf file associated with a shapefile.
+    """
     path = Path(src_file).expanduser()
     dbf_path = path.with_suffix('.dbf')
     confidence = None
 
     try:
         with open(dbf_path, 'rb') as f:
-            raw = f.read(100_000)
+            raw = f.read(100_000)  # read 100,000 bytes from the file
             detection = chardet.detect(raw)
-            encoding = detection['encoding']
-            confidence = detection['confidence']
             return detection
-
+        
     except FileNotFoundError as e:
         print(f"File not found or cannot be accessed: {e}")
         return None
+    
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         return None
     
 # Convert encoding to 'utf-8'
-def convert_encoding(*, src_file, output_dir, dst_encoding='utf-8'):
+def convert_encoding(
+        *,
+        src_file: Union[str, Path],
+        output_dir: Union[str, Path],
+        dst_encoding: str = 'utf-8'
+) -> Optional[Path]:
     """
     Convert the DBF encoding of a shapefile to UTF-8 and write a new .cpg file.
     """

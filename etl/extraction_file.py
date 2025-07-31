@@ -3,11 +3,18 @@ import requests
 import zipfile
 import tarfile
 import rarfile
+from pathlib import Path
 from tqdm import tqdm
 from urllib.parse import urlparse
+from typing import Union, Optional
 
 
-def download_file(*, url, folder, filename=None):
+def download_file(
+        *,
+        url: str,
+        folder: Union[Path, str],
+        filename: str = None
+) -> Optional[Path]:
     """
     Download a shapefile from a given URL and save it to a specified folder.
     If no filename is provided, it uses the filename from the URL.
@@ -18,9 +25,13 @@ def download_file(*, url, folder, filename=None):
         filename (str, optional): File name to use. If None, it's derived from the URL.
     """
     
-    folder = os.path.expanduser(folder)  # Expand "~" to full home directory path
+    folder = Path(folder).expanduser()  # Expand "~" to full home directory path
     os.makedirs(folder, exist_ok=True)  # Ensure folder exists
-    file_path = os.path.join(folder, filename)
+    
+    if filename is None:
+        filename = url.split('/')[-1]
+
+    file_path = folder / filename
 
     try:
         # Start downloading
@@ -59,28 +70,34 @@ def download_file(*, url, folder, filename=None):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
-def extract_archive(arch_path, extract_to=None):
+def extract_archive(
+        arch_path: Union[str, Path],
+        extract_to: Optional[Union[str, Path]] = None
+) -> None:
     """
     Extracts various archive formats (.zip, .tar.gz, .tar, .rar) to a target folder.
     """
     if extract_to is None:
-        extract_to = os.path.splitext(arch_path)[0]  # the base path without the extension
+        extract_to = Path(arch_path).with_suffix('')  # the base path without the extension
     os.makedirs(extract_to, exist_ok=True)
 
     if zipfile.is_zipfile(arch_path):
         with zipfile.ZipFile(arch_path, 'r') as zip_ref:
             zip_ref.extractall(extract_to)
         print(f"ZIP file extracted to: {extract_to}")
+        return extract_to
 
     elif tarfile.is_tarfile(arch_path):
         with tarfile.open(arch_path, 'r:*') as tar_ref:  # try all known supported compressions
             tar_ref.extractall(extract_to)
         print(f"TAR file extracted to: {extract_to}")
+        return extract_to
     
     elif arch_path.endswith('.rar'):
         with rarfile.RarFile(arch_path) as rar_ref:
             rar_ref.extractall(extract_to)
         print(f"RAR file extracted to: {extract_to}")
+        return extract_to
     
     else:
         raise ValueError(f"Unsupported archive format for file: {arch_path}")
