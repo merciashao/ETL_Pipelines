@@ -7,7 +7,7 @@ from tqdm import tqdm
 from urllib.parse import urlparse
 
 
-def download_file(url, folder, filename=None):
+def download_file(*, url, folder, filename=None):
     """
     Download a shapefile from a given URL and save it to a specified folder.
     If no filename is provided, it uses the filename from the URL.
