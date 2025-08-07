@@ -1,10 +1,10 @@
-import pandas as pd
-import geopandas as gpd
-import chardet
 import os
 from pathlib import Path
-import chardet
 from typing import Union, Optional
+
+import chardet
+import geopandas as gpd
+import pandas as pd
 
 
 # Identify and fix ecoding issues
@@ -32,8 +32,8 @@ def check_encoding(src_file: Union[str, Path]) -> Optional[dict]:
     
 # Convert encoding to 'utf-8'
 def convert_encoding(
-        *,
         src_file: Union[str, Path],
+        *,
         output_dir: Union[str, Path],
         dst_encoding: str = 'utf-8'
 ) -> Optional[Path]:
@@ -45,14 +45,12 @@ def convert_encoding(
         output_dir = Path(output_dir).expanduser()
         os.makedirs(output_dir, exist_ok=True)
         output_path = output_dir / (shp_path.stem + "_FIX.shp")
-
+        
         src_encoding = check_encoding(src_file)['encoding']
-
-        gdf = gpd.read_file(shp_path, encoding=src_encoding)
-    
-        gdf.to_file(output_path, encoding=dst_encoding)
-    
+        gdf = gpd.read_file(shp_path, encoding=src_encoding)    
+        gdf.to_file(output_path, encoding=dst_encoding)    
         cpg_path = output_path.with_suffix('.cpg')
+
         with open(cpg_path, 'w', encoding=dst_encoding) as f:
             f.write(dst_encoding)
     
