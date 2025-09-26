@@ -112,6 +112,7 @@ def strip_whitespace(
     
     return df.apply(_clean_series)
 
+
 @register_action("typo_mapping")
 def typo_mapping(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
@@ -126,10 +127,13 @@ def typo_mapping(
     df: pd.DataFrame | gpd.GeoDataFrame
         The input DataFrame to clean.
     parameters: dict
-        - exact: dict of {old_value: new_value}
-        - regex: dict of {pattern: replacement}
-        - backup: bool
-            If True, create a backup column with '_raw' suffix.
+        - mode: list[str]
+            Which rule types to apply ["exact", "regex"].
+        - column: dict
+            - exact: dict of {old_value: new_value}
+            - regex: dict of {pattern: replacement}
+            - backup: bool
+                If True, create a backup column with '_raw' suffix.
     
     Returns
     -------
@@ -137,24 +141,40 @@ def typo_mapping(
         DataFrame with corrected values.
     """
 
-    for col, rules in parameters.items():
+    def _apply_exact(series: pd.Series, exact_map: dict) -> pd.Series:
+        """Apply exact replacements to a column."""
+        return series.replace(exact_map)
+
+    def _apply_regex(series: pd.Series, regex_map: dict) -> pd.Series:
+        """Apply regex replacements to a column."""
+        for pattern, replacement in regex_map.items():
+            series = series.astype(str).str.replace(
+                pattern,
+                str(replacement) if replacement is not None else "",
+                regex=True
+            )
+        return series
+    
+    modes = parameters.get("mode", ["exact", "regex"])
+    col_rules = parameters.get("columns", {})
+
+    for col, rules in col_rules.items():
         if col not in df.columns:
             continue
-    
-    # Backup column if requested
+
         if rules.get("backup", False):
             df[f"{col}_raw"] = df[col]
+        
+        if "exact" in modes and "exact" in rules:
+            df[col] = _apply_exact(df[col], rules["exact"])
+
+        if "regex" in modes and "regex" in rules:
+            df[col] = _apply_regex(df[col], rules["regex"])
+        
+        df[col] = df[col].replace({None: np.nan})
     
-    # Apply exact mappings
-        if "exact" in rules:
-            df[col] = df[col].replace(rules["exact"])  # for exact, whole-value matches.
-
-    # Apply regex mappings
-        if "regex" in rules:
-            for pattern, repl in rules["regex"].items():
-                df[col] = df[col].str.replace(pattern, repl, regex=True)  # for substring replacements.
-
     return df
+    
 
 @register_action("convert_datetime")
 def convert_datetime(
@@ -184,20 +204,14 @@ def convert_datetime(
     """
 
     columns = parameters.get('columns', [])
-    backup = parameters.get('backup', False)
     regex_pattern = parameters.get('regex', r"^(\d{3})")
     year_shift = parameters.get('shift', 1911)
     date_format = parameters.get('format', '%Y/%m/%d')
-    cast_to = parameters.get('cast_to', None)
     errors = parameters.get('errors', 'coerce')
 
     for col in columns:
         if col not in df.columns:
             continue
-
-        # Backup column if requested
-        if backup:
-            df[f"{col}_raw"] = df[col]
 
         # Replace the local year with Gregorian year
         df[col] = (
@@ -205,53 +219,45 @@ def convert_datetime(
             .str.replace(
                 regex_pattern,
                 lambda m: str(int(m.group(1)) + year_shift),
-                regext=True
+                regex=True
             )
         )
 
         # Convert to datetime
-        target_col = cast_to if cast_to else col
-        df[target_col] = pd.to_datetime(df[col], format=date_format, errors=errors)
+        df[col] = pd.to_datetime(df[col], format=date_format, errors=errors)
 
     return df
 
 
-@register_action("dropna")
-def dropna(
+@register_action("droprows")
+def droprows(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     parameters: dict
 ) -> Optional[Union[pd.DataFrame, gpd.GeoDataFrame]]:
     """
-    Drop rows where all values are null.
+    Drop specific rows by index.
 
     Parameters
     ----------
     df: pd.DataFrame | gpd.GeoDataFrame
         The input DataFrame to clean.
     parameters: dict
-        - how: {'any', 'all'}, default: 'any'
-            Determine if row is removed when having at least one NA ('any') or all NA ('all').
-        - subset: list[str] | None
-            Labels along the row axis to consider. If None, apply to all columns.
+        - index: int | list[int]
+            Row index or a list of row indices to drop.
 
     Returns
     -------
     pd.DataFrame | gpd.GeoDataFrame
-        DataFrame with rows dropped according to the null condition.
+        DataFrame with the specific rows dropped.
     """
 
-    how = parameters.get('how', 'any')
-    subset = parameters.get('subset', None)
+    index = parameters.get("index")
 
-    # Handle YAML 'null' keyword → Python None
-    if subset in ('null', None):
-        subset = None
-    
-    df = df.dropna(how=how, subset=subset)
+    df = df.drop(index=index, errors="ignore")
     return df
 
-@register_action("exclude_pair_rows")
-def exclude_pair_rows(
+@register_action("drop_by_pairs")
+def drop_by_pairs(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     parameters: dict
 ) -> Optional[Union[pd.DataFrame, gpd.GeoDataFrame]]:
@@ -281,19 +287,209 @@ def exclude_pair_rows(
     pairs_to_exclude = parameters.get("not_in", [])
 
     # Assign the intended name to the DataFrame’s index
-    if index_name in df.columns:
-        df = df.set_index(index_name, drop=False)
+    df[index_name] = df.index
 
     # Build the condion for exclusion
     mask = pd.Series(False, index=df.index)
 
     for pair in pairs_to_exclude:
-        condition = True  # all rows considered valid
+        condition = pd.Series(True, index=df.index)
         for col, value in zip(columns, pair):
+            if col not in df.columns:
+                raise ValueError(f"Column '{col}' not found in DataFrame")
             condition &= (df[col] == value)
         mask |= condition
-    
-    # Exclude rows
-    df = df[~mask]
 
+    return df[~mask]
+
+@register_action("explode_village")
+def explode_village(
+    df: Union[pd.DataFrame, gpd.GeoDataFrame],
+    parameters: dict
+) -> Optional[Union[pd.DataFrame, gpd.GeoDataFrame]]:
+    """
+    Split a string column into multiple rows based on a delimiter, while preserving
+    the original values in a duplicate column.
+
+    Parameters
+    ----------
+    df: pd.DataFrame | gpd.GeoDataFrame
+        Input dataframe containing the source column.
+    parameters: dict
+        - source_column: str
+            Column to split. Default is "village_nm".
+        - delimiter: str 
+            Delimiter used for splitting. Default is "、".
+        - keep_original_as: str 
+            Name of the column to preserve original values. Default is "villg_raw".
+        - sort_by: str 
+            Column to sort by. Default is "prj_idx".
+        - reset_index: bool
+            Whether to reset the index after transformation. Default is True.
+        - new_index: str
+            Name of the new index column to assign after exploding rows.
+
+    Returns
+    -------
+    pd.DataFrame | gpd.GeoDataFrame
+        A dataframe where each split value is expanded into its own row.
+    """
+
+    # Extract parameters with defaults
+    source_column = parameters.get("source_column", 'village_nm')
+    delimiter = parameters.get("delimiter", '、')
+    original_column = parameters.get("keep_original_as", 'villg_raw')
+    sort_by = parameters.get("sort_by", 'prj_idx')
+    reset_index = parameters.get("reset_index", True)
+    new_index = parameters.get("new_index", 'loc_idx')
+
+    df = (
+        df
+        .assign(**{original_column: lambda d: d[source_column]})
+        .assign(**{source_column: lambda d: d[source_column].astype(str).str.split(delimiter)})
+        .explode(source_column)
+        .sort_values(by=sort_by)
+    )
+
+    if reset_index:
+        df = df.reset_index(drop=True).set_index(
+            pd.RangeIndex(start=0, stop=len(df), name=new_index)
+        )
+
+    return df
+
+@register_action("split_duplicates")
+def split_duplicates(
+    df: Union[pd.DataFrame, gpd.GeoDataFrame],
+    parameters: dict
+) -> dict[str, Union[pd.DataFrame, gpd.GeoDataFrame]]:
+    """
+    Identify duplicate and unique rows based on a subset of columns.
+
+    Parameters
+    ----------
+    df: DataFrame
+        Input dataframe.
+    parameters: dict
+        - subset: list[str]
+            Columns to check duplicates.
+        - output_aliases: dict
+            Names for duplicate and unique outputs.
+        - sort_duplicates_by: str, optional
+            Column to sort duplicates.
+
+    Returns
+    -------
+    
+    """
+
+    subsset = parameters.get("subset", [])
+    aliases = parameters.get("output_aliases", {"duplicates": "duplicates", "unique": "unique"})
+    sort_by = parameters.get("sort_duplicates_by")
+
+    dup_mask = df.duplicated(subset=subsset, keep=False)
+    dupes = df.loc[dup_mask].copy()
+    unique = df.loc[~dup_mask].copy()
+
+    if sort_by and sort_by in dupes.columns:
+        dupes = dupes.sort_values(by=sort_by)
+    
+    return {
+        aliases.get("duplicates", "duplicates"): dupes,
+        aliases.get("unique", "unique"): unique
+    }
+
+@register_action("dissolve_villages")
+def dissolve_villages(
+    df: Union[pd.DataFrame, gpd.GeoDataFrame],
+    parameters: dict
+) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
+    """
+    Dissolve duplicates of a target community into a single row.
+
+    Parameters
+    ----------
+    df: DataFrame
+        Input dataframe (usually duplicates).
+    parameters: dict
+        - where: str, optional
+            Query filter to select target rows.
+        - by: str
+            Column to dissolve by.
+        - aggregation_rules: dict
+            Rules for aggregating columns. 
+            Keys: 'sum', 'first', 'exclude_from_first', 'preserve_index_as', 'output_alias'.
+
+    Returns
+    -------
+
+    """
+    where = parameters.get("where")
+    by = parameters.get("by", "village_nm")
+    rules = parameters.get("aggregation_rules", {})
+    output_alias = rules.get("output_alias", "dissolved")
+
+    # Filter dataset
+    df_filtered = df.query(where) if where else df.copy()
+
+    # Preserve original index if requested
+    preserve_index_as = rules.get("preserve_index_as")
+    if preserve_index_as:
+        df_filtered[preserve_index_as] = df_filtered.index
+    
+    # Build aggregation dictionary
+    agg_rules = {}
+
+    # Explicit sum rules
+    for col in rules.get("sum", []):
+        if col in df_filtered.columns:
+            agg_rules[col] = "sum"
+
+    # Apply 'First' to rules except excluded if ["*"]
+    exclude = set(rules.get("exclude_from_first", []))
+    if rules.get("first"):
+        if rules["first"] == ["*"]:
+            for col in df_filtered.columns:
+                if col not in agg_rules and col not in exclude and col != by:
+                    agg_rules[col] = "first"
+        else:
+            for col in rules["first"]:
+                if col not in agg_rules and col in df_filtered.columns and col not in exclude:
+                    agg_rules[preserve_index_as] = "first"
+    
+    # Dissolve/groupby
+    df_dissolved = (
+        df_filtered
+        .dissolve(by=by, aggfunc=agg_rules, as_index=False)
+        .set_index(preserve_index_as)
+    )
+    df_dissolved.attrs['alias'] = output_alias
+
+    return df_dissolved
+
+@register_action("concat_finalize")
+def concat_finalize(
+    inputs: list[Union[pd.DataFrame, gpd.GeoDataFrame]],
+    parameters: dict
+) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
+    """
+    """
+
+    sort_by = parameters.get("sort_by")
+    reset_index = parameters.get("reset_index", True)
+    index_name = parameters.get("index_name")
+    ignore_index = parameters.get("ignore_index", False)
+    output_alias = parameters.get("output_alias", "final")
+
+    df = pd.concat(inputs, ignore_index=ignore_index)
+
+    if sort_by and sort_by in df.columns:
+        df = df.sort_values(by=sort_by)
+    
+    if reset_index:
+        df = df.reset_index(drop=True)
+        if index_name:
+            df.index.name = index_name
+    
+    df.attrs["alias"] = output_alias
     return df

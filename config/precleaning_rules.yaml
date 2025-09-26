@@ -12,7 +12,7 @@ precleaning_rules:
       parameters:
         to_crs: "epsg:3826"
     
-    - task_name: Rename columns
+    - task_name: Rename Columns
       description: Rename columns to match the expected schema.
       type: schema-level
       action: rename_columns
@@ -30,7 +30,7 @@ precleaning_rules:
           計畫年: proj_year
           area: area_ha
 
-    - task_name: Strip whitespace
+    - task_name: Strip Whitespace
       description: Remove leading/trailing whitespace and newine (/r/n) from string columns.
       type: column-level
       action: strip_whitespace
@@ -38,82 +38,86 @@ precleaning_rules:
         dtype: object
         remove_newlines: true
     
-    - task_name: Typo mapping
+    - task_name: Typo Mapping
       description: Correct common typos in the dataset.
       type: column-level
       action: typo_mapping
       parameters:
-        approv_dt:
-          backup: true
-          exact:
-            '烏眉里112/10/23': '112/10/23'
-            '未核定': null
-        submit_df:
-          backup: true
-          exact:
-            '未核定': null
-        branch:
-          backup: true
-          exact:
-            '臺中分局 臺中分局': '臺中分局'
-          regex:
-            '局': '署'
-        county:
-          exact:
-            '臺南市玉井區': '臺南市'
-        village_nm:
-          exact:
-            '崙[峰]里': '崙峯里'
-          regex:
-            '[,/]': '、'
+        mode: ["exact", "regex"]
+        columns:
+          approv_dt:
+            backup: true
+            exact:
+              '烏眉里112/10/23': '112/10/23'
+              '未核定': null
+          submit_dt:
+            backup: true
+            exact:
+              '未核定': null
+          branch:
+            backup: true
+            exact:
+              '臺中分局  臺中分局': '臺中分局'
+            regex:
+              '局': '署'
+          county:
+            exact:
+              '臺南市 玉井區': '臺南市'
+          village_nm:
+            exact:
+              '崙[峰]里': '崙峯里'
+            regex:
+              '[,/]': '、'
     
-    - task_name: Convert Grogorian Year
+    - task_name: Convert Gregorian Year
       description: Convert year calendar dates to Grogorian and cast as datetime.
       type: data-type-level
       action: convert_datetime
       parameters:
         columns: [approv_dt, submit_dt]
-        backup: true
         regex: '^(\d{3})'
         shift: 1911
         format: '%Y/%m/%d'
-        cast_to: grogorian_date
+        cast_to: gregorian_date
         errors: 'coerce'
     
-    - task_name: Drop all null rows
+    - task_name: Drop Rows with Null Values
       description: Drop rows where all values are null.
       type: row-level
-      action: dropna
+      action: droprows
       parameters:
-        how: all
-        subset: null
+        index:
+          - 1083
     
-    - task_name: Drop rows with specific pairs
-      description: Exclude rows matching spcific (prj_idx, county, comm_nm) pairs.
+    - task_name: Drop Rows with Specific Pairs
+      description: >
+        Create a new index 'prj_idx' and drop rows matching specific
+        (prj_idx, county, comm_nm) triplets.
       type: row-level
-      action: exclude_pair_rows
+      action: drop_by_pairs
       parameters:
         index_name: prj_idx
-        column: [prj_idx, county, comm_nm]
+        columns: [prj_idx, county, comm_nm]
         not_in:
           - [960, '臺南市', '大潭社區']
           - [975, '桃園市', '山東社區']
           - [1019, '臺南市', '東西庄社區']
 
-    - task_name: Split and explode duplicated village names
+    - task_name: Explode Multi-valued 'village_nm'
       description: >
         Split 'village_nm' by the delimiter '、', explode into rows,
-        preserve original column, and sort by 'prj_idx'.
+        preserve original index 'prj_idx' and create a new one 'loc_idx'.
       type: domain-specific transformations
-      action: split_explode_villagenm
+      action: explode_village
       parameters:
         source_column: village_nm
         delimiter: '、'
         keep_original_as: villg_raw
         sort_by: prj_idx
         reset_index: true
+        new_index: loc_idx
 
-    - task_name: Detect duplicates
+    - task_name: Split Duplicates
       description: >
         Identify duplicate rows by ['county','township','village_nm','comm_nm'];
         split the dataset into duplicates (dupes) and non-duplicates (unique).
@@ -130,16 +134,18 @@ precleaning_rules:
           unique: agri_unique
         sort_duplicates_by: comm_nm
     
-    - task_name: Dissolve target villages
+    - task_name: Dissolve Villages
       descriptions: >
-        From dupes, select rows where county == '桃園市' and comm_nm == '頭洲社區',
-        then dissolve by 'village_nm' with sum on 'area_ha' and first for all other
-        columns (excluding the grouping key). Preserve the original index as 'loc_idx'.
+        From duplicates, select rows where county == '桃園市' and comm_nm == '頭洲社區',
+        Dissolve these rows by 'village_nm', merging geometries and aggregating attributes:
+        - Sum 'area_ha'
+        - Take the first value for all remaining columns (excluding 'village_nm' and geometry)
+        Preserve the original index as 'loc_idx'.
       type: domain-specific transformations
-      action: dissolve_duplicated_villages
+      action: dissolve_villages
       parameters:
         input: agri_dupes
-        where: "county == '桃園市' and comm_nm == '頭洲社區'"
+        where: "county == '桃園市' and township == '新屋區' and comm_nm == '頭洲社區'"
         by: village_nm
         aggregation_rules:
           sum:
@@ -152,14 +158,14 @@ precleaning_rules:
           preserve_index_as: loc_idx
           output_alias: merge_vg
           
-    - task_name: Recombine and finalize
+    - task_name: Recombine and Finalize
       description: >
         Concatenate non-duplicates, and dissolved result; sort by 'prj_idx'; 
         reset the index and name it 'loc_idx'.
       type: domain-specific transformations
       action: concat_finalize
       parameters:
-        inputs:
+        input:
           - agri_unique
           - merge_vg
         ignore_index: false
