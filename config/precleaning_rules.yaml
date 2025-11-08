@@ -59,7 +59,7 @@ precleaning_rules:
             exact:
               '臺中分局  臺中分局': '臺中分局'
             regex:
-              '局': '署'
+              '局$': '署'
           county:
             exact:
               '臺南市 玉井區': '臺南市'
@@ -70,7 +70,7 @@ precleaning_rules:
               '[,/]': '、'
     
     - task_name: Convert Gregorian Year
-      description: Convert year calendar dates to Grogorian and cast as datetime.
+      description: Convert year calendar dates to Gregorian and cast as datetime.
       type: data-type-level
       action: convert_datetime
       parameters:
@@ -84,7 +84,7 @@ precleaning_rules:
     - task_name: Drop Rows with Null Values
       description: Drop rows where all values are null.
       type: row-level
-      action: droprows
+      action: dropnulls
       parameters:
         index:
           - 1083
@@ -98,7 +98,7 @@ precleaning_rules:
       parameters:
         index_name: prj_idx
         columns: [prj_idx, county, comm_nm]
-        not_in:
+        exclude_pairs:
           - [960, '臺南市', '大潭社區']
           - [975, '桃園市', '山東社區']
           - [1019, '臺南市', '東西庄社區']
@@ -107,7 +107,7 @@ precleaning_rules:
       description: >
         Split 'village_nm' by the delimiter '、', explode into rows,
         preserve original index 'prj_idx' and create a new one 'loc_idx'.
-      type: domain-specific transformations
+      type: domain-specific-transformations
       action: explode_village
       parameters:
         source_column: village_nm
@@ -135,13 +135,13 @@ precleaning_rules:
         sort_duplicates_by: comm_nm
     
     - task_name: Dissolve Villages
-      descriptions: >
+      description: >
         From duplicates, select rows where county == '桃園市' and comm_nm == '頭洲社區',
         Dissolve these rows by 'village_nm', merging geometries and aggregating attributes:
         - Sum 'area_ha'
         - Take the first value for all remaining columns (excluding 'village_nm' and geometry)
         Preserve the original index as 'loc_idx'.
-      type: domain-specific transformations
+      type: domain-specific-transformations
       action: dissolve_villages
       parameters:
         input: agri_dupes
@@ -162,7 +162,7 @@ precleaning_rules:
       description: >
         Concatenate non-duplicates, and dissolved result; sort by 'prj_idx'; 
         reset the index and name it 'loc_idx'.
-      type: domain-specific transformations
+      type: domain-specific-transformations
       action: concat_finalize
       parameters:
         input:
